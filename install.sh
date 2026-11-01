@@ -118,9 +118,6 @@ preflight() {
     for tool in tar readlink; do
         command -v "$tool" >/dev/null 2>&1 || die "'$tool' is missing."
     done
-    if [ -z "$from" ]; then
-        command -v curl >/dev/null 2>&1 || die "'curl' is missing."
-    fi
     if [ -d /usr/lib/millennium ] && [ ! -L /usr/lib/millennium ] && [ ! -e /run/ostree-booted ]; then
         die "Millennium is already installed system-wide in /usr/lib/millennium (by your package manager or the official installer). Remove that one first, or keep using it."
     fi
@@ -152,6 +149,7 @@ latest_version() {
         printf '%s\n' "${name%-linux-x86_64.tar.gz}"
         return
     fi
+    command -v curl >/dev/null 2>&1 || return 0
     if [ "$beta" -eq 1 ]; then
         curl -fsSL -H 'Accept: application/vnd.github+json' \
             "https://api.github.com/repos/$UPSTREAM/releases?per_page=20" 2>/dev/null \
@@ -442,6 +440,9 @@ download() {
 
 do_install() {
     steam_ready
+    if [ -z "$from" ] && ! command -v curl >/dev/null 2>&1; then
+        die "'curl' is missing, so Millennium can't be downloaded."
+    fi
     version=$(latest_version)
     [ -n "$version" ] || die "Couldn't find the latest Millennium release. Are you online?"
     old=$(installed_version)
