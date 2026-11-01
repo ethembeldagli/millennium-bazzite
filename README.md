@@ -1,6 +1,6 @@
 # Millennium for Bazzite
 
-**Steam themes and plugins on Bazzite.** One command, no root, survives system updates, and keeps Decky working in Game Mode.
+**Steam themes and plugins on Bazzite.** One command, no root, survives system updates, updates itself, and keeps Decky working in Game Mode.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/main/install.sh | sh
@@ -10,7 +10,7 @@ Run it in a normal terminal in Desktop Mode (not inside distrobox). It installs 
 
 Log out and back in once afterwards, so Millennium also loads when you start Steam yourself.
 
-Run the same command again any time to **update**, **reinstall** or **delete** it. You get a menu, no flags needed.
+New Millennium releases install automatically in the background. To change settings or remove it, run `millennium-bazzite` (or the same curl command) and pick from the menu, no flags needed.
 
 ## Why this exists
 
@@ -25,7 +25,7 @@ This installer does it the Bazzite way:
 | Survives Bazzite updates | No | Yes, it's all in your home folder |
 | Needs a reboot | — | No, it restarts Steam for you (log out once later) |
 | Decky Loader | Stops working | Keeps working in Game Mode |
-| Update / uninstall | Manual | Same command, pick from a menu |
+| Updates | Manual | Automatic, plus a `millennium-bazzite` menu |
 
 It downloads Millennium's own release from GitHub and checks its SHA-256 checksum. Nothing in Millennium is modified.
 
@@ -40,26 +40,36 @@ So by default each one gets its own mode:
 
 You can also load Millennium in Game Mode (menu option **[g]**), but then Decky won't work there.
 
-## Update or uninstall
+## Updates
 
-Run the install command again:
+When Millennium releases a new version, it installs by itself: a small background timer checks every 6 hours and installs it. If Steam is open, you get a notification to restart Steam. Millennium itself only notifies about updates on Linux; this does the installing. The installer keeps itself up to date the same way.
+
+The timer also puts back the links that load Millennium if a Steam update ever removes them.
+
+## Settings and uninstall
+
+Run `millennium-bazzite` (or the curl command):
 
 ```
-Millennium for Bazzite  Steam themes and plugins, no root needed
+  Millennium for Bazzite  v1.1.0
+  Steam themes and plugins · no root · survives updates
 
-  Installed: 3.6.2 (Desktop Mode only)
-  Latest:    3.6.3
+  Millennium   3.6.2 → 3.6.3 available
+  Loads in     Desktop Mode (Game Mode stays stock)
+  Updates      automatic (every 6 hours)
+  Steam        running with Millennium
 
   [u] Update to 3.6.3
-  [r] Reinstall
+  [a] Turn automatic updates off
   [g] Also load it in Game Mode (turns Decky off there)
+  [r] Reinstall
   [d] Delete
   [q] Quit
 
 Choose [u]:
 ```
 
-**Delete** removes everything it added and gives Decky its debugger file back. It asks before deleting your Millennium plugins and settings.
+**Delete** removes everything it added (including the command and the timer) and gives Decky its debugger file back. It asks before deleting your Millennium plugins and settings.
 
 <details>
 <summary>Options for scripts</summary>
@@ -74,6 +84,8 @@ curl -fsSL https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/ma
 | `--update` | Update if a newer Millennium is out |
 | `--uninstall` | Remove Millennium |
 | `--check` | Show what's installed and whether an update is out |
+| `--auto-update-on` / `--auto-update-off` | Turn automatic updates on or off |
+| `--auto-update` | Check for updates now and install them quietly (what the timer runs) |
 | `--game-mode` / `--desktop-only` | Choose where Millennium loads |
 | `--beta` | Use Millennium beta releases |
 | `--no-restart` | Don't restart Steam afterwards |
@@ -93,6 +105,8 @@ Everything is in your home folder:
 | `~/.config/environment.d/millennium.conf` | Tells Millennium where it's installed. In Desktop-only mode it points nowhere in Game Mode, so Millennium stays off there |
 | `~/.config/gamescope-session-plus/sessions.d/steam` | A marked block that turns Decky's debugger back on when Game Mode starts. Anything else in this file is kept |
 | `~/.config/autostart/millennium-bazzite.desktop` | Turns Decky's debugger off when you log into Desktop Mode |
+| `~/.local/bin/millennium-bazzite` | The `millennium-bazzite` command (a copy of the installer) |
+| `~/.config/systemd/user/millennium-bazzite-update.{timer,service}` | Checks for new Millennium releases every 6 hours |
 
 ## FAQ
 

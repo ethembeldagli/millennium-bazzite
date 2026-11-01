@@ -7,15 +7,17 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/main/install.sh | sh
 #
-# Run the same command again to update or remove it. Flags are optional:
-# see --help.
+# It also installs a `millennium-bazzite` command and keeps Millennium up to
+# date in the background. Run either one again to update, change settings or
+# remove it. Flags are optional: see --help.
 
 set -u
 
-INSTALLER_VERSION="1.0.0"
+INSTALLER_VERSION="1.1.0"
 UPSTREAM="SteamClientHomebrew/Millennium"
-SELF_URL="https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/main/install.sh"
-ONE_LINER="curl -fsSL $SELF_URL | sh"
+RAW_URL="https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/main/install.sh"
+SELF_URL="${MILLENNIUM_BAZZITE_SELF_URL:-$RAW_URL}"
+ONE_LINER="curl -fsSL $RAW_URL | sh"
 
 action=""
 beta=0
@@ -23,14 +25,16 @@ yes=0
 restart=ask
 game_mode=""
 from=""
+auto_choice=""
 
 # ---------------------------------------------------------------- output
 
 if [ -t 1 ]; then
     B="$(printf '\033[1m')" D="$(printf '\033[2m')" R="$(printf '\033[0m')"
-    RED="$(printf '\033[31m')" GRN="$(printf '\033[32m')" YLW="$(printf '\033[33m')" CYN="$(printf '\033[36m')"
+    RED="$(printf '\033[31m')" GRN="$(printf '\033[32m')" YLW="$(printf '\033[33m')"
+    CYN="$(printf '\033[36m')" MAG="$(printf '\033[35m')"
 else
-    B="" D="" R="" RED="" GRN="" YLW="" CYN=""
+    B="" D="" R="" RED="" GRN="" YLW="" CYN="" MAG=""
 fi
 
 say()  { printf '%s\n' "$*"; }
@@ -38,6 +42,14 @@ step() { printf '%s::%s %s\n' "$CYN" "$R" "$*"; }
 ok()   { printf '%s✓%s %s\n' "$GRN" "$R" "$*"; }
 warn() { printf '%s!%s %s\n' "$YLW" "$R" "$*" >&2; }
 die()  { printf '%sError:%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
+row()  { printf '  %s%-12s%s %s\n' "$D" "$1" "$R" "$2"; }
+
+banner() {
+    say ""
+    say "  ${B}${MAG}Millennium for Bazzite${R}  ${D}v$INSTALLER_VERSION${R}"
+    say "  ${D}Steam themes and plugins · no root · survives updates${R}"
+    say ""
+}
 
 interactive() { [ "$yes" -eq 0 ] && [ -t 1 ] && ( : </dev/tty ) 2>/dev/null; }
 
@@ -61,8 +73,9 @@ usage() {
     cat <<EOF
 Millennium for Bazzite $INSTALLER_VERSION
 
-Run with no options to pick install, update or delete from a menu:
+Run with no options to pick what to do from a menu:
   $ONE_LINER
+  millennium-bazzite        (once installed)
 
 Options (all optional):
   --install         install or reinstall the latest Millennium
@@ -71,6 +84,10 @@ Options (all optional):
   --check           show what's installed and whether an update is out
   --game-mode       load Millennium in Game Mode too
   --desktop-only    load Millennium in Desktop Mode only (default)
+  --auto-update-on  install new Millennium releases automatically (default)
+  --auto-update-off check for new releases only when you run this
+  --auto-update     check for updates now and install them quietly
+                    (this is what the background timer runs)
   --beta            use Millennium beta releases
   --no-restart      don't restart Steam afterwards
   --yes             don't ask questions; use the defaults
@@ -101,6 +118,12 @@ GAME_MODE_HOOK="$HOME/.config/gamescope-session-plus/sessions.d/steam"
 DESKTOP_AUTOSTART="$HOME/.config/autostart/millennium-bazzite.desktop"
 HOOK_START="# >>> Millennium for Bazzite >>>"
 HOOK_END="# <<< Millennium for Bazzite <<<"
+
+# The `millennium-bazzite` command and the timer that keeps Millennium updated.
+CMD_PATH="$HOME/.local/bin/millennium-bazzite"
+UNIT_DIR="$HOME/.config/systemd/user"
+TIMER="millennium-bazzite-update.timer"
+SERVICE="millennium-bazzite-update.service"
 
 # ---------------------------------------------------------------- checks
 
@@ -295,10 +318,19 @@ start_steam() {
 wait_for_millennium() {
     i=0
     while [ "$i" -lt 120 ]; do
-        millennium_loaded && return 0
-        i=$((i + 2))
-        sleep 2
+        if millennium_loaded; then
+            [ -t 1 ] && printf '\r\033[K'
+            return 0
+        fi
+        if [ -t 1 ]; then
+            case $((i % 4)) in 0) f="⠋" ;; 1) f="⠙" ;; 2) f="⠸" ;; *) f="⠴" ;; esac
+            printf '\r%s%s%s Waiting for Millennium to load... %ss %s(Steam may update itself first)%s' \
+                "$CYN" "$f" "$R" "$i" "$D" "$R"
+        fi
+        i=$((i + 1))
+        sleep 1
     done
+    [ -t 1 ] && printf '\r\033[K'
     return 1
 }
 
@@ -425,6 +457,170 @@ remove_old_env_files() {
     done
 }
 
+# ---------------------------------------------------------------- command and auto-update
+
+# script_version FILE: the INSTALLER_VERSION inside a copy of this script.
+script_version() {
+    sed -n 's/^INSTALLER_VERSION="\([^"]*\)"$/\1/p' "$1" 2>/dev/null | head -n 1
+}
+
+running_as_command() {
+    [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" = "$(readlink -f "$CMD_PATH" 2>/dev/null)" ]
+}
+
+# fetch_self FILE: download the latest version of this script.
+fetch_self() {
+    command -v curl >/dev/null 2>&1 || return 1
+    curl -fsSL --retry 2 -o "$1" "$SELF_URL" 2>/dev/null || return 1
+    [ -n "$(script_version "$1")" ] && sh -n "$1" 2>/dev/null
+}
+
+# install_command: put this script at ~/.local/bin/millennium-bazzite.
+install_command() {
+    running_as_command && return 0
+    mkdir -p "$(dirname "$CMD_PATH")"
+    if [ -f "$0" ] && [ -n "$(script_version "$0")" ]; then
+        cp "$0" "$CMD_PATH.new" || return 1
+    else
+        fetch_self "$CMD_PATH.new" || { rm -f "$CMD_PATH.new"; return 1; }
+    fi
+    chmod 755 "$CMD_PATH.new" && mv "$CMD_PATH.new" "$CMD_PATH"
+}
+
+# self_update ARGS...: replace the installed command with a newer version from
+# GitHub, then run the new one with the same arguments.
+self_update() {
+    [ -z "${MILLENNIUM_BAZZITE_SELF_UPDATED:-}" ] || return 0
+    new="$CMD_PATH.download"
+    fetch_self "$new" || { rm -f "$new"; return 0; }
+    new_version=$(script_version "$new")
+    if older "$INSTALLER_VERSION" "$new_version"; then
+        chmod 755 "$new" && mv "$new" "$CMD_PATH" || return 0
+        say "Updated Millennium for Bazzite $INSTALLER_VERSION → $new_version."
+        MILLENNIUM_BAZZITE_SELF_UPDATED=1
+        export MILLENNIUM_BAZZITE_SELF_UPDATED
+        exec sh "$CMD_PATH" "$@"
+    fi
+    rm -f "$new"
+}
+
+# A newer script run through curl refreshes an older installed command.
+refresh_command() {
+    running_as_command && return 0
+    if [ ! -f "$CMD_PATH" ]; then
+        # Installed by version 1.0, which had no command or automatic updates.
+        if install_command && ! auto_update_enabled; then
+            enable_auto_update
+            ok "Automatic updates are now on. Run millennium-bazzite to change that."
+        fi
+        return 0
+    fi
+    old_cmd=$(script_version "$CMD_PATH")
+    if [ -z "$old_cmd" ] || older "$old_cmd" "$INSTALLER_VERSION"; then
+        install_command
+    fi
+}
+
+remove_command() {
+    if [ -f "$CMD_PATH" ] && [ -n "$(script_version "$CMD_PATH")" ]; then
+        rm -f "$CMD_PATH"
+    fi
+}
+
+use_systemctl() {
+    [ -z "${MILLENNIUM_BAZZITE_NO_SYSTEMCTL:-}" ] && command -v systemctl >/dev/null 2>&1 \
+        && systemctl --user show-environment >/dev/null 2>&1
+}
+
+auto_update_enabled() { [ -L "$UNIT_DIR/timers.target.wants/$TIMER" ] && [ -f "$UNIT_DIR/$TIMER" ]; }
+
+enable_auto_update() {
+    mkdir -p "$UNIT_DIR/timers.target.wants"
+    {
+        echo "[Unit]"
+        echo "Description=Install new Millennium releases (Millennium for Bazzite)"
+        echo ""
+        echo "[Service]"
+        echo "Type=oneshot"
+        echo "ExecStart=/bin/sh %h/.local/bin/millennium-bazzite --auto-update"
+        echo "Nice=10"
+    } >"$UNIT_DIR/$SERVICE"
+    {
+        echo "[Unit]"
+        echo "Description=Check for Millennium updates (Millennium for Bazzite)"
+        echo ""
+        echo "[Timer]"
+        echo "OnStartupSec=2min"
+        echo "OnUnitActiveSec=6h"
+        echo "RandomizedDelaySec=10min"
+        echo ""
+        echo "[Install]"
+        echo "WantedBy=timers.target"
+    } >"$UNIT_DIR/$TIMER"
+    ln -sfn "../$TIMER" "$UNIT_DIR/timers.target.wants/$TIMER"
+    if use_systemctl; then
+        systemctl --user daemon-reload >/dev/null 2>&1
+        systemctl --user start "$TIMER" >/dev/null 2>&1
+    fi
+}
+
+disable_auto_update() {
+    if use_systemctl; then
+        systemctl --user stop "$TIMER" >/dev/null 2>&1
+    fi
+    rm -f "$UNIT_DIR/timers.target.wants/$TIMER" "$UNIT_DIR/$TIMER" "$UNIT_DIR/$SERVICE"
+    rmdir "$UNIT_DIR/timers.target.wants" 2>/dev/null
+    if use_systemctl; then
+        systemctl --user daemon-reload >/dev/null 2>&1
+    fi
+}
+
+# notify TITLE BODY: a desktop notification, if one can be shown.
+notify() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    notify-send -a "Millennium for Bazzite" -i steam "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# Steam updates can remove the links that load Millennium; put them back.
+self_heal() {
+    healed=0
+    for pair in "ubuntu12_32/libXtst.so.6:libmillennium_bootstrap_x86.so" \
+                "ubuntu12_64/libXtst.so.6:libmillennium_bootstrap_hhx64.so" \
+                "ubuntu12_64/libmillennium_hhx64.so:libmillennium_hhx64.so"; do
+        l="$STEAM_DIR/${pair%%:*}"
+        [ "$(readlink "$l" 2>/dev/null)" = "$LIB_DIR/${pair#*:}" ] || healed=1
+    done
+    [ -f "$ENV_FILE" ] || healed=1
+    [ "$healed" -eq 1 ] || return 0
+    link_steam
+    [ -f "$ENV_FILE" ] || write_env_file "$(current_mode)"
+    say "Put back the links that load Millennium into Steam."
+}
+
+do_auto_update() {
+    old=$(installed_version)
+    if [ -z "$old" ]; then
+        say "Millennium isn't installed, nothing to update."
+        return 0
+    fi
+    [ -d "$STEAM_DIR/ubuntu12_32" ] && self_heal
+    latest=$(latest_version)
+    if [ -z "$latest" ]; then
+        say "Couldn't reach GitHub, will try again later."
+        return 0
+    fi
+    if ! older "$old" "$latest"; then
+        say "Millennium $old is up to date."
+        return 0
+    fi
+    yes=1
+    restart=no
+    do_install
+    if steam_running; then
+        notify "Millennium $latest is ready" "Restart Steam to start using it."
+    fi
+}
+
 sha256_ok() {
     if command -v sha256sum >/dev/null 2>&1; then
         (cd "$1" && sha256sum -c "$2" >/dev/null 2>&1)
@@ -516,6 +712,19 @@ do_install() {
     remove_old_env_files
     check_steam_beta
 
+    # New installs get automatic updates; updates keep what was chosen before.
+    if [ "$auto_choice" = off ]; then
+        disable_auto_update
+    elif [ "$auto_choice" = on ] || [ -z "$old" ] || auto_update_enabled; then
+        if install_command; then
+            enable_auto_update
+        else
+            warn "Couldn't install the millennium-bazzite command, so automatic updates are off."
+        fi
+    else
+        install_command || true
+    fi
+
     if [ "$old" = unknown ]; then
         ok "Installed Millennium $version (replaced an older copy)."
     elif [ "$old" = "$version" ]; then
@@ -532,12 +741,15 @@ do_install() {
         say "  It loads in Desktop Mode and Game Mode."
         decky_installed && warn "Decky Loader won't work in Game Mode while Millennium loads there."
     fi
+    if auto_update_enabled; then
+        say "  New Millennium releases install automatically (checked every 6 hours)."
+    fi
     note_unlocked_usr_copy
 
     restart_steam with-millennium
     case $? in
         0)
-            step "Waiting for Millennium to load (Steam may update itself first)..."
+            [ -t 1 ] || step "Waiting for Millennium to load (Steam may update itself first)..."
             if wait_for_millennium; then
                 ok "Millennium is running. Open it from the Steam menu (top left) → Millennium."
                 say "  Log out and back in once, so it also loads when you open Steam yourself."
@@ -553,7 +765,7 @@ do_install() {
             fi
             ;;
     esac
-    say "  ${D}From your next login it loads automatically. Run this again to update or remove it.${R}"
+    say "  ${D}From your next login it loads automatically. Run ${R}millennium-bazzite${D} to change settings or remove it.${R}"
 }
 
 # ---------------------------------------------------------------- update / check
@@ -583,6 +795,11 @@ do_check() {
     else
         say "Latest:    $latest (up to date)"
     fi
+    if auto_update_enabled; then
+        say "Updates:   automatic, checked every 6 hours"
+    else
+        say "Updates:   manual, run millennium-bazzite to update"
+    fi
 }
 
 do_update() {
@@ -607,6 +824,17 @@ do_set_mode() {
         decky_installed && warn "Decky Loader won't work in Game Mode while Millennium loads there."
     fi
     say "  The change applies from your next login or switch to Game Mode."
+}
+
+do_set_auto_update() {
+    if [ "$1" = on ]; then
+        install_command || die "Couldn't install the millennium-bazzite command."
+        enable_auto_update
+        ok "Automatic updates are on. New Millennium releases install by themselves."
+    else
+        disable_auto_update
+        ok "Automatic updates are off. Run millennium-bazzite to update."
+    fi
 }
 
 # ---------------------------------------------------------------- uninstall
@@ -639,6 +867,8 @@ do_uninstall() {
         rm -f "$ENV_FILE"
     fi
     split_with_decky none
+    disable_auto_update
+    remove_command
     # Give Decky back the debugger file that Millennium deleted.
     decky_installed && touch "$CEF_FILE"
     rm -rf "$LIB_DIR" "$LIB_DIR.new" "$LIB_DIR.old"
@@ -666,39 +896,68 @@ do_uninstall() {
 menu() {
     old=$(installed_version)
     latest=$(latest_version)
+    banner
 
-    say ""
-    say "${B}Millennium for Bazzite${R}  ${D}Steam themes and plugins, no root needed${R}"
-    say ""
     if [ -z "$old" ]; then
-        say "  Latest Millennium: ${latest:-unknown (offline?)}"
+        row "Millennium" "not installed"
+        row "Latest" "${latest:-unknown (offline?)}"
+        decky_installed && row "Decky" "found, it keeps working in Game Mode"
         say ""
-        say "  [i] Install"
-        say "  [q] Quit"
+        say "  ${B}[i]${R} Install"
+        say "  ${B}[q]${R} Quit"
         default=i
     else
         mode=$(current_mode)
-        if [ "$mode" = desktop ]; then mode_text="Desktop Mode only"; else mode_text="Desktop Mode and Game Mode"; fi
-        say "  Installed: $old ($mode_text)"
-        say "  Latest:    ${latest:-unknown (offline?)}"
+        if [ -z "$latest" ]; then
+            row "Millennium" "$old ${D}(couldn't check for updates)${R}"
+        elif older "$old" "$latest"; then
+            row "Millennium" "$old ${YLW}→ $latest available${R}"
+        else
+            row "Millennium" "$old ${GRN}✓ up to date${R}"
+        fi
+        if [ "$mode" = desktop ]; then
+            row "Loads in" "Desktop Mode ${D}(Game Mode stays stock)${R}"
+        else
+            row "Loads in" "Desktop Mode and Game Mode"
+        fi
+        if auto_update_enabled; then
+            row "Updates" "${GRN}automatic${R} ${D}(every 6 hours)${R}"
+        else
+            row "Updates" "manual"
+        fi
+        loaded=$(loaded_millennium_path)
+        if millennium_loaded; then
+            row "Steam" "${GRN}running with Millennium${R}"
+        elif [ -n "$loaded" ]; then
+            row "Steam" "${YLW}running an older copy, log out and back in${R}"
+        elif steam_running; then
+            row "Steam" "${YLW}running without it, log out and back in${R}"
+        else
+            row "Steam" "not running"
+        fi
         say ""
         default=q
         if [ -n "$latest" ] && older "$old" "$latest"; then
-            say "  [u] Update to $latest"
+            say "  ${B}[u]${R} Update to $latest"
             default=u
         fi
-        say "  [r] Reinstall"
+        if auto_update_enabled; then
+            say "  ${B}[a]${R} Turn automatic updates off"
+        else
+            say "  ${B}[a]${R} Turn automatic updates on"
+        fi
         if [ "$mode" = desktop ]; then
             if decky_installed; then
-                say "  [g] Also load it in Game Mode (turns Decky off there)"
+                say "  ${B}[g]${R} Also load it in Game Mode ${D}(turns Decky off there)${R}"
             else
-                say "  [g] Also load it in Game Mode"
+                say "  ${B}[g]${R} Also load it in Game Mode"
             fi
         else
-            say "  [g] Load it in Desktop Mode only"
+            say "  ${B}[g]${R} Load it in Desktop Mode only"
         fi
-        say "  [d] Delete"
-        say "  [q] Quit"
+        say "  ${B}[r]${R} Reinstall"
+        say "  ${B}[d]${R} Delete"
+        say "  ${B}[q]${R} Quit"
     fi
     say ""
     printf 'Choose [%s]: ' "$default"
@@ -708,6 +967,15 @@ menu() {
     case "$choice" in
         [Ii]*|[Rr]*) do_install ;;
         [Uu]*) do_update ;;
+        [Aa]*)
+            if [ -z "$old" ]; then
+                say "Nothing changed."
+            elif auto_update_enabled; then
+                do_set_auto_update off
+            else
+                do_set_auto_update on
+            fi
+            ;;
         [Gg]*)
             if [ -z "$old" ]; then
                 say "Nothing changed."
@@ -717,7 +985,15 @@ menu() {
                 do_set_mode desktop
             fi
             ;;
-        [Dd]*) if [ -n "$old" ]; then do_uninstall; else say "Nothing changed."; fi ;;
+        [Dd]*)
+            if [ -z "$old" ]; then
+                say "Nothing changed."
+            elif confirm "Delete Millennium?" n; then
+                do_uninstall
+            else
+                say "Nothing changed."
+            fi
+            ;;
         *) say "Nothing changed." ;;
     esac
 }
@@ -725,12 +1001,16 @@ menu() {
 # ---------------------------------------------------------------- main
 
 main() {
+    all_args="$*"
     while [ $# -gt 0 ]; do
         case "$1" in
             --install|install) action=install ;;
             --update|update|--upgrade) action=update ;;
             --uninstall|uninstall|--remove|--delete) action=uninstall ;;
             --check|check|--status) action=check ;;
+            --auto-update) action=auto ;;
+            --auto-update-on) auto_choice=on ;;
+            --auto-update-off) auto_choice=off ;;
             --game-mode) game_mode=both ;;
             --desktop-only) game_mode=desktop ;;
             --beta) beta=1 ;;
@@ -746,15 +1026,27 @@ main() {
     done
 
     preflight
-    if [ -z "$action" ] && [ -n "$game_mode" ] && [ -n "$(installed_version)" ]; then
-        do_set_mode "$game_mode"
-        return
+
+    # The installed command keeps itself up to date; a newer script run through
+    # curl refreshes an older installed command.
+    if running_as_command && [ "$action" != uninstall ]; then
+        # shellcheck disable=SC2086 # the original arguments, split again on purpose
+        self_update $all_args
+    elif [ -n "$(installed_version)" ]; then
+        refresh_command
+    fi
+
+    if [ -z "$action" ] && [ -n "$(installed_version)" ] && { [ -n "$game_mode" ] || [ -n "$auto_choice" ]; }; then
+        [ -n "$game_mode" ] && do_set_mode "$game_mode"
+        [ -n "$auto_choice" ] && do_set_auto_update "$auto_choice"
+        return 0
     fi
     case "$action" in
         install) do_install ;;
         update) do_update ;;
         uninstall) do_uninstall ;;
         check) do_check ;;
+        auto) do_auto_update ;;
         *)
             if interactive; then
                 menu

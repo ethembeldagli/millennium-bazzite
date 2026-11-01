@@ -51,7 +51,7 @@ new_home() {
 }
 
 run() {
-    MILLENNIUM_BAZZITE_ALLOW_CONTAINER=1 XDG_CURRENT_DESKTOP=test \
+    MILLENNIUM_BAZZITE_ALLOW_CONTAINER=1 MILLENNIUM_BAZZITE_NO_SYSTEMCTL=1 XDG_CURRENT_DESKTOP=test \
         "$SHELL_UNDER_TEST" "$INSTALLER" --yes --no-restart "$@" </dev/null >"$WORK/out" 2>&1
 }
 
@@ -140,6 +140,23 @@ rm -f "$CEF"
 env -i HOME="$HOME" bash -c "set -a; . '$HOOK'" 2>/dev/null || env -i HOME="$HOME" sh -c "set -a; . '$HOOK'"
 check "game mode hook turns Decky's debugger back on" test -e "$CEF"
 
+# The command and automatic updates.
+CMD="$HOME/.local/bin/millennium-bazzite"
+UNITS="$HOME/.config/systemd/user"
+check "command installed" test -x "$CMD"
+check "command is this script" grep -q '^INSTALLER_VERSION=' "$CMD"
+check "update service written" grep -q 'millennium-bazzite --auto-update' "$UNITS/millennium-bazzite-update.service"
+check "update timer written" grep -q 'OnUnitActiveSec=6h' "$UNITS/millennium-bazzite-update.timer"
+check "update timer enabled" test -L "$UNITS/timers.target.wants/millennium-bazzite-update.timer"
+check "says updates are automatic" out_has "install automatically"
+
+rm -f "$CMD" "$UNITS/millennium-bazzite-update.timer" "$UNITS/millennium-bazzite-update.service" \
+    "$UNITS/timers.target.wants/millennium-bazzite-update.timer"
+check "an install from version 1.0 upgrades itself" run --check --from "$v1"
+check "command added for old installs" test -x "$CMD"
+check "auto-update turned on for old installs" test -L "$UNITS/timers.target.wants/millennium-bazzite-update.timer"
+check "says auto-update is now on" out_has "Automatic updates are now on"
+
 # ------------------------------------------------------------ check / update
 echo "check and update"
 check "check works" run --check --from "$v2"
@@ -150,6 +167,39 @@ check "new files in place" grep -q "3.6.3" "$LIB/libmillennium_x86.so"
 check "no staging dirs left" test ! -e "$LIB.new" -a ! -e "$LIB.old"
 check "update again is a no-op" run --update --from "$v2"
 check "says up to date" out_has "3.6.3 is up to date"
+check "check shows automatic updates" run --check --from "$v2"
+check "says automatic" out_has "Updates:   automatic"
+
+# ------------------------------------------------------------ automatic updates
+echo "automatic updates"
+check "auto-update off" run --auto-update-off
+check "timer removed" test ! -e "$UNITS/millennium-bazzite-update.timer"
+check "timer link removed" test ! -L "$UNITS/timers.target.wants/millennium-bazzite-update.timer"
+check "reinstall keeps it off" run --install --from "$v2"
+check "timer still off" test ! -e "$UNITS/millennium-bazzite-update.timer"
+check "auto-update on" run --auto-update-on
+check "timer back" test -L "$UNITS/timers.target.wants/millennium-bazzite-update.timer"
+check "background check with nothing new" run --auto-update --from "$v2"
+check "says nothing to do" out_has "3.6.3 is up to date"
+echo 3.6.2 >"$LIB/.installed-by-millennium-bazzite"
+check "background update succeeds" run --auto-update --from "$v2"
+check "background update installs" out_has "Updated Millennium 3.6.2 → 3.6.3"
+check "version recorded after background update" grep -qx 3.6.3 "$LIB/.installed-by-millennium-bazzite"
+rm "$HOME/.steam/steam/ubuntu12_32/libXtst.so.6"
+check "background run after Steam removed the hook" run --auto-update --from "$v2"
+check "hook put back" link_to "$HOME/.steam/steam/ubuntu12_32/libXtst.so.6" "$LIB/libmillennium_bootstrap_x86.so"
+check "says it put the hook back" out_has "Put back the links"
+
+if command -v curl >/dev/null 2>&1; then
+    sed 's/^INSTALLER_VERSION=".*"$/INSTALLER_VERSION="9.9.9"/' "$INSTALLER" >"$WORK/newer.sh"
+    MILLENNIUM_BAZZITE_SELF_URL="file://$WORK/newer.sh" MILLENNIUM_BAZZITE_ALLOW_CONTAINER=1 \
+        MILLENNIUM_BAZZITE_NO_SYSTEMCTL=1 "$SHELL_UNDER_TEST" "$CMD" --check --from "$v2" </dev/null >"$WORK/out" 2>&1
+    check "command updates itself" grep -q '^INSTALLER_VERSION="9.9.9"' "$CMD"
+    check "says it updated itself" out_has "Updated Millennium for Bazzite"
+    check "updated command still works" out_has "Installed: Millennium 3.6.3"
+else
+    echo "  skip self-update (no curl)"
+fi
 
 # ------------------------------------------------------------ game mode toggle
 echo "game mode"
@@ -195,6 +245,9 @@ check "game mode hook gone" test "$(hook_blocks)" = 0
 check "own settings survive uninstall" grep -q MY_OWN_SETTING "$HOOK"
 check "desktop autostart gone" test ! -e "$AUTOSTART"
 check "Decky's debugger file restored" test -e "$CEF"
+check "command removed" test ! -e "$CMD"
+check "update timer removed" test ! -e "$UNITS/millennium-bazzite-update.timer"
+check "update service removed" test ! -e "$UNITS/millennium-bazzite-update.service"
 check "uninstall again is harmless" run --uninstall
 check "says not installed" out_has "isn't installed"
 
