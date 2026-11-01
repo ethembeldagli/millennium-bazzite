@@ -24,7 +24,7 @@ jobs:
         include:
           - name: Fedora, bash, systemd
             image: fedora:latest
-            setup: dnf -y -q install tar gzip systemd
+            setup: dnf -y -q install tar gzip systemd shadow-utils util-linux
           - name: Ubuntu, dash
             image: ubuntu:24.04
             setup: "true"
@@ -37,7 +37,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ${{ matrix.setup }}
-      - run: SHELL_UNDER_TEST=sh sh tests/run.sh
+      # The installer refuses to run as root, like it should, so test as a normal user.
+      - name: Run tests as a normal user
+        run: |
+          if command -v useradd >/dev/null; then useradd -m tester; else adduser -D tester; fi
+          cp -r . /tmp/repo && chown -R tester /tmp/repo
+          su tester -c 'cd /tmp/repo && SHELL_UNDER_TEST=sh sh tests/run.sh'
+      - name: Refuses to run as root
+        run: |
+          if sh install.sh --check 2>err.txt; then exit 1; fi
+          grep -q "not with sudo" err.txt
 
   # Installs the real latest Millennium release into a fake home folder, so a
   # change in Millennium's release files is caught early (also runs weekly).

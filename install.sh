@@ -81,7 +81,9 @@ EOF
 
 # ---------------------------------------------------------------- paths
 
-[ -n "${HOME:-}" ] && [ "$HOME" != "/" ] && [ -d "$HOME" ] || die "HOME isn't set to your home folder."
+if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ] || [ ! -d "$HOME" ]; then
+    die "HOME isn't set to your home folder."
+fi
 
 LIB_DIR="$HOME/.local/lib/millennium"
 VERSION_FILE="$LIB_DIR/.installed-by-millennium-bazzite"
@@ -127,7 +129,7 @@ preflight() {
 # On Bazzite a copy in /usr can only come from unlocking /usr by hand. It is
 # wiped by the next system update and isn't used once this install is in place.
 note_unlocked_usr_copy() {
-    [ -e /run/ostree-booted ] && [ -d /usr/lib/millennium ] || return 0
+    if [ ! -e /run/ostree-booted ] || [ ! -d /usr/lib/millennium ]; then return 0; fi
     say "  ${D}Note: there's an old Millennium copy in /usr/lib/millennium (from unlocking /usr)."
     say "  It isn't used anymore and disappears with your next Bazzite update.${R}"
 }
@@ -325,7 +327,7 @@ restart_steam() {
 decky_installed() { [ -e "$HOME/homebrew/services/PluginLoader" ]; }
 
 remove_game_mode_hook() {
-    [ -f "$GAME_MODE_HOOK" ] && grep -qF "$HOOK_START" "$GAME_MODE_HOOK" || return 0
+    if [ ! -f "$GAME_MODE_HOOK" ] || ! grep -qF "$HOOK_START" "$GAME_MODE_HOOK"; then return 0; fi
     sed "/^$HOOK_START\$/,/^$HOOK_END\$/d" "$GAME_MODE_HOOK" >"$GAME_MODE_HOOK.tmp" && mv "$GAME_MODE_HOOK.tmp" "$GAME_MODE_HOOK"
     grep -q '[^[:space:]]' "$GAME_MODE_HOOK" || rm -f "$GAME_MODE_HOOK"
 }
@@ -408,7 +410,7 @@ check_steam_beta() {
 # Settings left by older community install scripts would override ours.
 remove_old_env_files() {
     for f in "$ENV_DIR"/*.conf; do
-        [ -f "$f" ] && [ "$f" != "$ENV_FILE" ] || continue
+        if [ ! -f "$f" ] || [ "$f" = "$ENV_FILE" ]; then continue; fi
         grep -q '^ *MILLENNIUM' "$f" 2>/dev/null || continue
         name="${f#"$HOME"/}"
         if interactive && ! confirm "Remove old Millennium settings in ~/$name? They override this install." y; then
@@ -484,8 +486,9 @@ do_install() {
     mkdir "$tmp/x"
     tar xzf "$tmp/$tarball" -C "$tmp/x" || die "Couldn't unpack $tarball."
     src="$tmp/x/usr/lib/millennium"
-    [ -f "$src/libmillennium_x86.so" ] && [ -f "$src/libmillennium_bootstrap_x86.so" ] \
-        || die "Millennium $version has files this installer doesn't know. Please open an issue."
+    if [ ! -f "$src/libmillennium_x86.so" ] || [ ! -f "$src/libmillennium_bootstrap_x86.so" ]; then
+        die "Millennium $version has files this installer doesn't know. Please open an issue."
+    fi
     extra=$(tar tzf "$tmp/$tarball" | grep -v '/$' | grep -v '^\(\./\)\{0,1\}usr/lib/millennium/' | head -n 1)
     [ -z "$extra" ] || die "Millennium $version now ships files outside /usr/lib (like ${extra#./}). This installer needs an update for that; please open an issue."
 
@@ -556,7 +559,7 @@ do_check() {
         return 0
     fi
     mode=$(current_mode)
-    [ "$mode" = desktop ] && mode="Desktop Mode only" || mode="Desktop Mode and Game Mode"
+    if [ "$mode" = desktop ]; then mode="Desktop Mode only"; else mode="Desktop Mode and Game Mode"; fi
     say "Installed: Millennium $old ($mode)"
     if millennium_loaded; then
         say "Running:   yes, Steam has it loaded"
