@@ -216,12 +216,17 @@ steam_pids() {
 
 steam_running() { [ -n "$(steam_pids)" ]; }
 
-millennium_loaded() {
-    lib="$(real_lib_dir)/libmillennium_x86.so"
+# The Millennium library Steam has loaded right now, wherever it came from.
+loaded_millennium_path() {
     for pid in $(steam_pids); do
-        grep -qF "$lib" "/proc/$pid/maps" 2>/dev/null && return 0
+        found=$(grep -o '/[^ ]*/libmillennium_x86\.so' "/proc/$pid/maps" 2>/dev/null | head -n 1)
+        [ -n "$found" ] && { printf '%s\n' "$found"; return 0; }
     done
     return 1
+}
+
+millennium_loaded() {
+    [ "$(loaded_millennium_path)" = "$(real_lib_dir)/libmillennium_x86.so" ]
 }
 
 # process_named NAME: is a process with this name (as in /proc/PID/comm) running?
@@ -535,6 +540,7 @@ do_install() {
             step "Waiting for Millennium to load (Steam may update itself first)..."
             if wait_for_millennium; then
                 ok "Millennium is running. Open it from the Steam menu (top left) → Millennium."
+                say "  Log out and back in once, so it also loads when you open Steam yourself."
             else
                 warn "Steam started, but Millennium hasn't loaded yet. If it doesn't show up, log out and back in."
             fi
@@ -562,10 +568,13 @@ do_check() {
     mode=$(current_mode)
     if [ "$mode" = desktop ]; then mode="Desktop Mode only"; else mode="Desktop Mode and Game Mode"; fi
     say "Installed: Millennium $old ($mode)"
+    loaded=$(loaded_millennium_path)
     if millennium_loaded; then
         say "Running:   yes, Steam has it loaded"
+    elif [ -n "$loaded" ]; then
+        say "Running:   an older copy from ${loaded%/*}. Log out and back in to switch."
     elif steam_running; then
-        say "Running:   no, restart Steam to load it"
+        say "Running:   no. Log out and back in, or run this again and restart Steam."
     fi
     if [ -z "$latest" ]; then
         say "Latest:    couldn't check (offline?)"

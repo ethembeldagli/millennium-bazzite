@@ -8,6 +8,8 @@ curl -fsSL https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/ma
 
 Run it in a normal terminal in Desktop Mode (not inside distrobox). It installs the latest [Millennium](https://github.com/SteamClientHomebrew/Millennium), restarts Steam, and checks that Millennium loaded. Then open **Steam → Millennium** to pick a theme.
 
+Log out and back in once afterwards, so Millennium also loads when you start Steam yourself.
+
 Run the same command again any time to **update**, **reinstall** or **delete** it. You get a menu, no flags needed.
 
 ## Why this exists
@@ -21,7 +23,7 @@ This installer does it the Bazzite way:
 | Where files go | `/usr/lib/millennium` (read-only on Bazzite) | `~/.local/lib/millennium` |
 | Needs `sudo` | Yes | No |
 | Survives Bazzite updates | No | Yes, it's all in your home folder |
-| Needs a reboot | — | No, it restarts Steam for you |
+| Needs a reboot | — | No, it restarts Steam for you (log out once later) |
 | Decky Loader | Stops working | Keeps working in Game Mode |
 | Update / uninstall | Manual | Same command, pick from a menu |
 
