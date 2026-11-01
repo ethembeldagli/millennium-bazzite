@@ -48,26 +48,9 @@ The timer also puts back the links that load Millennium if a Steam update ever r
 
 ## Settings and uninstall
 
-Run `millennium-bazzite` (or the curl command):
+Run `millennium-bazzite` (or the curl command) for a full-screen menu. Use the arrow keys and Enter, or press a letter:
 
-```
-  Millennium for Bazzite  v1.1.0
-  Steam themes and plugins · no root · survives updates
-
-  Millennium   3.6.2 → 3.6.3 available
-  Loads in     Desktop Mode (Game Mode stays stock)
-  Updates      automatic (every 6 hours)
-  Steam        running with Millennium
-
-  [u] Update to 3.6.3
-  [a] Turn automatic updates off
-  [g] Also load it in Game Mode (turns Decky off there)
-  [r] Reinstall
-  [d] Delete
-  [q] Quit
-
-Choose [u]:
-```
+![The millennium-bazzite menu: Millennium version, where it loads, automatic updates and Steam status, with options to update, toggle automatic updates or Game Mode, reinstall, delete or quit](docs/menu.png)
 
 **Delete** removes everything it added (including the command and the timer) and gives Decky its debugger file back. It asks before deleting your Millennium plugins and settings.
 
@@ -91,6 +74,8 @@ curl -fsSL https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/ma
 | `--no-restart` | Don't restart Steam afterwards |
 | `--yes` | Don't ask questions; use the defaults |
 | `--from FILE` | Install from a downloaded `millennium-*.tar.gz` |
+
+Set `PLAIN_INSTALLER=1` (or `NO_COLOR=1`) for the plain text menu instead of the full-screen one.
 
 </details>
 

@@ -13,7 +13,7 @@
 
 set -u
 
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.2.0"
 UPSTREAM="SteamClientHomebrew/Millennium"
 RAW_URL="https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/main/install.sh"
 SELF_URL="${MILLENNIUM_BAZZITE_SELF_URL:-$RAW_URL}"
@@ -26,6 +26,7 @@ restart=ask
 game_mode=""
 from=""
 auto_choice=""
+delete_data=""
 
 # ---------------------------------------------------------------- output
 
@@ -41,7 +42,7 @@ say()  { printf '%s\n' "$*"; }
 step() { printf '%s::%s %s\n' "$CYN" "$R" "$*"; }
 ok()   { printf '%s✓%s %s\n' "$GRN" "$R" "$*"; }
 warn() { printf '%s!%s %s\n' "$YLW" "$R" "$*" >&2; }
-die()  { printf '%sError:%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
+die()  { ui_stop; printf '%sError:%s %s\n' "$RED" "$R" "$*" >&2; exit 1; }
 row()  { printf '  %s%-12s%s %s\n' "$D" "$1" "$R" "$2"; }
 
 banner() {
@@ -50,6 +51,386 @@ banner() {
     say "  ${D}Steam themes and plugins · no root · survives updates${R}"
     say ""
 }
+
+# >>> fullscreen ui >>>
+# A full-screen, full-colour menu in the style of Terminal Wrapped's slides,
+# shared by the ethembeldagli installers. When the terminal can't show it
+# (too small, no colour, not interactive) the plain text menu is used instead.
+# UI_THEME is "TOP|BOTTOM|ACCENT|ACCENT2", each colour as "R G B".
+
+UI_ESC=$(printf '\033')
+UI_CR=$(printf '\r')
+UI_NL='
+'
+UI_ACTIVE=0
+UI_CLEANUP=""
+UI_LOG=""
+UI_SEL=1
+UI_TRUE=0 UI_STTY="" UI_PREPARED="" UI_KEY="" UI_CHOICE="" UI_TICK=0
+UI_TITLE="" UI_RIGHT="" UI_SUB="" UI_LINES="" UI_OPTS="" UI_FOOT="" UI_BRAND=""
+
+# ui_supported: can this terminal show the full-screen menu?
+ui_supported() {
+    [ -z "${NO_COLOR:-}" ] || return 1
+    [ -z "${PLAIN_INSTALLER:-}" ] || return 1
+    case "${TERM:-dumb}" in dumb | linux | vt*) return 1 ;; esac
+    case "${COLORTERM:-}" in
+        truecolor | 24bit) UI_TRUE=1 ;;
+        *) case "${TERM:-}" in *256col* | xterm-kitty | alacritty | wezterm | foot*) UI_TRUE=0 ;; *) return 1 ;; esac ;;
+    esac
+    [ -t 1 ] || return 1
+    ( : </dev/tty ) 2>/dev/null || return 1
+    command -v stty >/dev/null 2>&1 && command -v dd >/dev/null 2>&1 || return 1
+    ui_size || return 1
+    [ "$UI_COLS" -ge 60 ] && [ "$UI_ROWS" -ge 20 ]
+}
+
+ui_size() {
+    _ui_size=$(stty size </dev/tty 2>/dev/null) || return 1
+    UI_ROWS=${_ui_size% *} UI_COLS=${_ui_size#* }
+    case "$UI_ROWS$UI_COLS" in '' | *[!0-9]*) return 1 ;; esac
+    [ "$UI_ROWS" -gt 0 ]
+}
+
+# ui_sgr 38|48 R G B -> UI_C, the escape for that foreground/background colour
+ui_sgr() {
+    if [ "$UI_TRUE" = 1 ]; then
+        UI_C="${UI_ESC}[$1;2;$2;$3;$4m"
+    else
+        UI_C="${UI_ESC}[$1;5;$((16 + 36 * (($2 * 5 + 127) / 255) + 6 * (($3 * 5 + 127) / 255) + ($4 * 5 + 127) / 255))m"
+    fi
+}
+
+# ui_mix "R G B" "R G B" STEP STEPS -> _ui_r _ui_g _ui_b
+ui_mix() {
+    # shellcheck disable=SC2086 # split the colours into their parts
+    set -- $1 $2 "$3" "$4"
+    _ui_r=$(($1 + ($4 - $1) * $7 / $8))
+    _ui_g=$(($2 + ($5 - $2) * $7 / $8))
+    _ui_b=$(($3 + ($6 - $3) * $7 / $8))
+}
+
+# ui_prepare: colours for this theme and terminal size.
+ui_prepare() {
+    _ui_old_ifs=$IFS
+    IFS='|'
+    # shellcheck disable=SC2086 # split the theme into its four colours
+    set -- $UI_THEME
+    IFS=$_ui_old_ifs
+    UI_TOP=$1 UI_BOTTOM=$2 UI_ACC=$3 UI_ACC2=$4
+    _ui_y=1
+    while [ "$_ui_y" -le "$UI_ROWS" ]; do
+        ui_mix "$UI_TOP" "$UI_BOTTOM" "$((_ui_y - 1))" "$((UI_ROWS > 1 ? UI_ROWS - 1 : 1))"
+        ui_sgr 48 "$_ui_r" "$_ui_g" "$_ui_b"
+        eval "UI_BG_$_ui_y=\$UI_C"
+        _ui_y=$((_ui_y + 1))
+    done
+    ui_sgr 38 240 240 255 && UI_FG_C=$UI_C
+    ui_mix "240 240 255" "$UI_TOP" 45 100 && ui_sgr 38 "$_ui_r" "$_ui_g" "$_ui_b" && UI_DIM_C=$UI_C
+    # shellcheck disable=SC2086
+    ui_sgr 38 $UI_ACC && UI_ACC_C=$UI_C
+    # shellcheck disable=SC2086
+    ui_sgr 38 $UI_ACC2 && UI_ACC2_C=$UI_C
+    ui_sgr 38 124 255 178 && UI_GOOD_C=$UI_C
+    ui_sgr 38 255 206 92 && UI_WARN_C=$UI_C
+    ui_sgr 38 255 112 120 && UI_BAD_C=$UI_C
+    # shellcheck disable=SC2086
+    ui_sgr 48 $UI_ACC && UI_BAR_BG=$UI_C
+    # shellcheck disable=SC2086
+    ui_sgr 38 $UI_BOTTOM && UI_BAR_FG=$UI_C
+    UI_BLANK=""
+    _ui_x=0
+    while [ "$_ui_x" -lt "$UI_COLS" ]; do UI_BLANK="$UI_BLANK "; _ui_x=$((_ui_x + 1)); done
+    UI_W=$((UI_COLS - 8))
+    [ "$UI_W" -gt 66 ] && UI_W=66
+    UI_X=$(((UI_COLS - UI_W) / 2 + 1))
+    UI_PREPARED="$UI_ROWS:$UI_COLS"
+    return 0
+}
+
+ui_start() {
+    [ "$UI_ACTIVE" = 1 ] && return 0
+    UI_STTY=$(stty -g </dev/tty)
+    stty -echo -icanon min 0 time 5 </dev/tty
+    printf '%s[?1049h%s[?25l%s[?7l' "$UI_ESC" "$UI_ESC" "$UI_ESC"
+    UI_ACTIVE=1
+    UI_PREPARED=""
+    trap 'ui_stop; eval "${UI_CLEANUP:-:}"' EXIT
+    trap 'ui_stop; exit 130' INT TERM HUP
+    return 0
+}
+
+ui_stop() {
+    [ "$UI_ACTIVE" = 1 ] || return 0
+    printf '%s[0m%s[?7h%s[?25h%s[?1049l' "$UI_ESC" "$UI_ESC" "$UI_ESC" "$UI_ESC"
+    stty "$UI_STTY" </dev/tty 2>/dev/null || true
+    UI_ACTIVE=0
+    return 0
+}
+
+# ui_put ROW COL TEXT: add TEXT at ROW, COL on top of that row's background.
+ui_put() {
+    [ "$1" -ge 1 ] && [ "$1" -le "$UI_ROWS" ] || return 0
+    _ui_bg=""
+    eval "_ui_bg=\$UI_BG_$1"
+    UI_FRAME="$UI_FRAME${UI_ESC}[$1;$2H$_ui_bg$3"
+}
+
+# ui_draw: draw UI_TITLE, UI_SUB, UI_LINES, UI_OPTS and UI_FOOT, centred on the
+# gradient. UI_LINES holds "info|label|value|tone", "text|tone|text",
+# "log|text", "spin|text" or "blank" lines; UI_OPTS holds "key|label|hint".
+ui_draw() {
+    ui_size || return 0
+    [ "$UI_PREPARED" = "$UI_ROWS:$UI_COLS" ] || ui_prepare
+    UI_FRAME="${UI_ESC}[0m"
+    _ui_y=1
+    while [ "$_ui_y" -le "$UI_ROWS" ]; do
+        ui_put "$_ui_y" 1 "$UI_BLANK"
+        _ui_y=$((_ui_y + 1))
+    done
+
+    _ui_count=4
+    [ -n "$UI_LINES" ] && _ui_count=$((_ui_count + $(printf '%s\n' "$UI_LINES" | grep -c '') + 1))
+    [ -n "$UI_OPTS" ] && _ui_count=$((_ui_count + $(printf '%s\n' "$UI_OPTS" | grep -c '') + 1))
+    [ -n "$UI_FOOT" ] && _ui_count=$((_ui_count + 2))
+    _ui_y=$(((UI_ROWS - _ui_count) / 2 + 1))
+    [ "$_ui_y" -lt 2 ] && _ui_y=2
+    _ui_x=$UI_X
+
+    # Title, version on the right, subtitle and a gradient rule.
+    ui_put "$_ui_y" "$_ui_x" "$UI_ACC_C${UI_ESC}[1m◆ $UI_FG_C$UI_TITLE${UI_ESC}[22m"
+    if [ -n "$UI_RIGHT" ]; then
+        ui_put "$_ui_y" "$((_ui_x + UI_W - ${#UI_RIGHT}))" "$UI_DIM_C$UI_RIGHT"
+    fi
+    _ui_y=$((_ui_y + 1))
+    ui_put "$_ui_y" "$_ui_x" "$UI_DIM_C$UI_SUB"
+    _ui_y=$((_ui_y + 1))
+    _ui_rule=""
+    _ui_i=0
+    while [ "$_ui_i" -lt "$UI_W" ]; do
+        ui_mix "$UI_ACC" "$UI_ACC2" "$_ui_i" "$UI_W"
+        ui_sgr 38 "$_ui_r" "$_ui_g" "$_ui_b"
+        _ui_rule="$_ui_rule$UI_C━"
+        _ui_i=$((_ui_i + 1))
+    done
+    ui_put "$_ui_y" "$_ui_x" "$_ui_rule"
+    _ui_y=$((_ui_y + 2))
+
+    if [ -n "$UI_LINES" ]; then
+        while IFS='|' read -r _ui_kind _ui_a _ui_b _ui_c; do
+            case "$_ui_kind" in
+                info)
+                    ui_tone "$_ui_c"
+                    _ui_label=$(printf '%-12s' "$_ui_a")
+                    ui_put "$_ui_y" "$_ui_x" "$UI_DIM_C$_ui_label $_ui_tone$_ui_b"
+                    ;;
+                text) ui_tone "$_ui_a" && ui_put "$_ui_y" "$_ui_x" "$_ui_tone$_ui_b" ;;
+                big) ui_tone "$_ui_a" && ui_put "$_ui_y" "$_ui_x" "$_ui_tone${UI_ESC}[1m$_ui_b${UI_ESC}[22m" ;;
+                log) ui_put "$_ui_y" "$((_ui_x + 2))" "$UI_DIM_C$_ui_a" ;;
+                spin)
+                    ui_spinner
+                    ui_put "$_ui_y" "$_ui_x" "$UI_ACC2_C$_ui_spin $UI_FG_C${UI_ESC}[1m$_ui_a${UI_ESC}[22m"
+                    ;;
+            esac
+            _ui_y=$((_ui_y + 1))
+        done <<EOF
+$UI_LINES
+EOF
+        _ui_y=$((_ui_y + 1))
+    fi
+
+    if [ -n "$UI_OPTS" ]; then
+        _ui_i=1
+        while IFS='|' read -r _ui_key _ui_label _ui_hint; do
+            _ui_text="$_ui_label${_ui_hint:+  $_ui_hint}"
+            _ui_pad=$((UI_W - ${#_ui_text} - 7))
+            [ "$_ui_pad" -lt 1 ] && _ui_pad=1
+            if [ "$_ui_i" = "$UI_SEL" ]; then
+                ui_put "$_ui_y" "$_ui_x" "$UI_BAR_BG$UI_BAR_FG${UI_ESC}[1m ▸ $_ui_label${UI_ESC}[22m${_ui_hint:+  $_ui_hint}$(printf "%${_ui_pad}s" '')$_ui_key   "
+            else
+                ui_put "$_ui_y" "$_ui_x" "   $UI_FG_C$_ui_label$UI_DIM_C${_ui_hint:+  $_ui_hint}$(printf "%${_ui_pad}s" '')$_ui_key"
+            fi
+            _ui_i=$((_ui_i + 1))
+            _ui_y=$((_ui_y + 1))
+        done <<EOF
+$UI_OPTS
+EOF
+        _ui_y=$((_ui_y + 1))
+    fi
+
+    if [ -n "$UI_FOOT" ]; then
+        _ui_y=$((_ui_y + 1))
+        ui_put "$_ui_y" "$_ui_x" "$UI_DIM_C$UI_FOOT"
+    fi
+    if [ -n "$UI_BRAND" ] && [ "$_ui_y" -lt "$((UI_ROWS - 1))" ]; then
+        ui_put "$UI_ROWS" "$(((UI_COLS - ${#UI_BRAND}) / 2 + 1))" "$UI_DIM_C$UI_BRAND"
+    fi
+    printf '%s' "$UI_FRAME"
+    return 0
+}
+
+ui_tone() {
+    case "$1" in
+        good) _ui_tone=$UI_GOOD_C ;;
+        warn) _ui_tone=$UI_WARN_C ;;
+        bad) _ui_tone=$UI_BAD_C ;;
+        dim) _ui_tone=$UI_DIM_C ;;
+        accent) _ui_tone=$UI_ACC_C ;;
+        accent2) _ui_tone=$UI_ACC2_C ;;
+        *) _ui_tone=$UI_FG_C ;;
+    esac
+    return 0
+}
+
+ui_spinner() {
+    case $((${UI_TICK:-0} % 10)) in
+        0) _ui_spin="⠋" ;; 1) _ui_spin="⠙" ;; 2) _ui_spin="⠹" ;; 3) _ui_spin="⠸" ;; 4) _ui_spin="⠼" ;;
+        5) _ui_spin="⠴" ;; 6) _ui_spin="⠦" ;; 7) _ui_spin="⠧" ;; 8) _ui_spin="⠇" ;; *) _ui_spin="⠏" ;;
+    esac
+    return 0
+}
+
+# ui_key: wait up to half a second for a key; sets UI_KEY to up, down, enter,
+# esc, char:X or "" when nothing was pressed.
+ui_key() {
+    _ui_k=$(dd bs=1 count=1 2>/dev/null </dev/tty; echo .)
+    _ui_k=${_ui_k%.}
+    case "$_ui_k" in
+        "") UI_KEY="" ;;
+        "$UI_ESC")
+            stty min 0 time 1 </dev/tty
+            _ui_seq=$(dd bs=8 count=1 2>/dev/null </dev/tty)
+            stty min 0 time 5 </dev/tty
+            case "$_ui_seq" in
+                "[A" | OA) UI_KEY=up ;;
+                "[B" | OB) UI_KEY=down ;;
+                "") UI_KEY=esc ;;
+                *) UI_KEY=other ;;
+            esac
+            ;;
+        "$UI_NL" | "$UI_CR" | " ") UI_KEY=enter ;;
+        *) UI_KEY="char:$(printf '%s' "$_ui_k" | tr '[:upper:]' '[:lower:]')" ;;
+    esac
+    return 0
+}
+
+# ui_choose: show the menu until something is picked; sets UI_CHOICE to the
+# key of the option, or "esc".
+ui_choose() {
+    _ui_n=$(printf '%s\n' "$UI_OPTS" | grep -c '')
+    [ "$UI_SEL" -ge 1 ] && [ "$UI_SEL" -le "$_ui_n" ] || UI_SEL=1
+    UI_FOOT="↑↓ move · enter select · or press a key"
+    ui_draw
+    while :; do
+        _ui_before="$UI_ROWS:$UI_COLS"
+        ui_key
+        case "$UI_KEY" in
+            "") ui_size && [ "$UI_ROWS:$UI_COLS" != "$_ui_before" ] && ui_draw ;;
+            up) UI_SEL=$((UI_SEL > 1 ? UI_SEL - 1 : _ui_n)) && ui_draw ;;
+            down) UI_SEL=$((UI_SEL < _ui_n ? UI_SEL + 1 : 1)) && ui_draw ;;
+            enter)
+                UI_CHOICE=$(printf '%s\n' "$UI_OPTS" | sed -n "${UI_SEL}p" | cut -d'|' -f1)
+                return 0
+                ;;
+            esc) UI_CHOICE=esc && return 0 ;;
+            char:*)
+                _ui_letter=${UI_KEY#char:}
+                if printf '%s\n' "$UI_OPTS" | grep -q "^$_ui_letter|"; then
+                    UI_CHOICE=$_ui_letter
+                    return 0
+                fi
+                case "$_ui_letter" in
+                    k) UI_SEL=$((UI_SEL > 1 ? UI_SEL - 1 : _ui_n)) && ui_draw ;;
+                    j) UI_SEL=$((UI_SEL < _ui_n ? UI_SEL + 1 : 1)) && ui_draw ;;
+                esac
+                ;;
+        esac
+    done
+}
+
+# ui_ask QUESTION DETAIL DEFAULT(y|n): a full-screen yes/no question.
+ui_ask() {
+    _ui_saved_lines=$UI_LINES _ui_saved_opts=$UI_OPTS _ui_saved_sel=$UI_SEL
+    UI_LINES="big|accent2|$1"
+    [ -n "$2" ] && UI_LINES="$UI_LINES${UI_NL}text||$2"
+    UI_OPTS="y|Yes|${UI_NL}n|No|"
+    if [ "$3" = y ]; then UI_SEL=1; else UI_SEL=2; fi
+    ui_choose
+    UI_LINES=$_ui_saved_lines UI_OPTS=$_ui_saved_opts UI_SEL=$_ui_saved_sel
+    [ "$UI_CHOICE" = y ]
+}
+
+# ui_busy TEXT: a full-screen "please wait" while something quick runs.
+ui_busy() {
+    UI_LINES="spin|$1" UI_OPTS="" UI_FOOT=""
+    ui_draw
+    return 0
+}
+
+# ui_run TITLE COMMAND...: run COMMAND with its output going to a log, showing
+# the latest lines on a progress screen, then the result. Returns its status.
+ui_run() {
+    _ui_title=$1
+    shift
+    UI_LOG=$(mktemp "${TMPDIR:-/tmp}/installer.XXXXXX") || return 1
+    # The job can't touch the screen: it runs with the full-screen view marked
+    # inactive and its questions answered by their defaults.
+    # shellcheck disable=SC2030,SC2034 # UI_IN_JOB is only for the job, read by the installers' own functions
+    (UI_ACTIVE=0 UI_IN_JOB=1 && "$@") </dev/null >"$UI_LOG" 2>&1 &
+    _ui_pid=$!
+    UI_TICK=0
+    UI_OPTS="" UI_FOOT=""
+    while kill -0 "$_ui_pid" 2>/dev/null; do
+        UI_LINES="spin|$_ui_title$(ui_log_lines)"
+        ui_draw
+        UI_TICK=$((UI_TICK + 1))
+        sleep 0.12 2>/dev/null || sleep 1
+    done
+    _ui_status=0
+    wait "$_ui_pid" || _ui_status=$?
+    if [ "$_ui_status" = 0 ]; then
+        UI_LINES="big|good|✓ Done$(ui_log_lines)"
+    else
+        UI_LINES="big|bad|✗ That didn't work$(ui_log_lines)"
+    fi
+    UI_FOOT="Press any key to close"
+    ui_draw
+    UI_KEY=""
+    while [ -z "$UI_KEY" ]; do ui_key; done
+    return "$_ui_status"
+}
+
+# The last lines of the log, without colours, as "log|..." lines.
+ui_log_lines() {
+    _ui_max=$((UI_ROWS - 16))
+    [ "$_ui_max" -gt 10 ] && _ui_max=10
+    [ "$_ui_max" -lt 3 ] && _ui_max=3
+    printf '\nblank'
+    tail -n 40 "$UI_LOG" 2>/dev/null | tr "$UI_CR" '\n' \
+        | sed -e "s/$UI_ESC\[[0-9;?]*[A-Za-z]//g" -e 's/^ *//' -e '/^$/d' -e 's/|/¦/g' \
+        | fold -s -w "$((UI_W - 4))" | sed -e 's/^ *//' -e '/^$/d' \
+        | tail -n "$_ui_max" | sed -e 's/^/log|/' \
+        | while IFS= read -r _ui_line; do printf '\n%s' "$_ui_line"; done
+    return 0
+}
+
+# ui_finish: leave the full-screen view and print what the last ui_run did,
+# so it stays in the terminal's scrollback.
+ui_finish() {
+    ui_stop
+    if [ -n "$UI_LOG" ] && [ -f "$UI_LOG" ]; then
+        printf '\n'
+        cat "$UI_LOG"
+        rm -f "$UI_LOG"
+        UI_LOG=""
+    fi
+    return 0
+}
+# <<< fullscreen ui <<<
+
+# Bazzite purple, from Terminal Wrapped's "night" theme.
+UI_THEME="21 27 92|4 5 29|157 140 255|255 122 224"
+UI_BRAND="github.com/ethembeldagli/millennium-bazzite"
 
 interactive() { [ "$yes" -eq 0 ] && [ -t 1 ] && ( : </dev/tty ) 2>/dev/null; }
 
@@ -877,7 +1258,7 @@ do_uninstall() {
     kept=""
     for d in $DATA_DIRS; do [ -d "$d" ] && kept="$kept $d"; done
     if [ -n "$kept" ]; then
-        if confirm "Also delete your Millennium plugins, settings and logs?" n; then
+        if [ "$delete_data" = yes ] || { [ -z "$delete_data" ] && confirm "Also delete your Millennium plugins, settings and logs?" n; }; then
             for d in $kept; do rm -rf "$d"; done
             ok "Deleted plugins, settings and logs."
         else
@@ -998,6 +1379,124 @@ menu() {
     esac
 }
 
+# The same menu, full screen and in colour, when the terminal can show it.
+fullscreen_menu() {
+    ui_start
+    UI_TITLE="Millennium for Bazzite" UI_RIGHT="v$INSTALLER_VERSION"
+    UI_SUB="Steam themes and plugins · no root · survives updates"
+    ui_busy "Checking for updates"
+    old=$(installed_version)
+    latest=$(latest_version)
+
+    if [ -z "$old" ]; then
+        UI_LINES="info|Millennium|not installed yet|dim
+info|Latest|${latest:-unknown (offline?)}|"
+        if decky_installed; then
+            UI_LINES="$UI_LINES${UI_NL}info|Decky|found, keeps working in Game Mode|good"
+        fi
+        UI_OPTS="i|Install Millennium${latest:+ $latest}|${UI_NL}q|Quit|"
+    else
+        if [ -z "$latest" ]; then
+            UI_LINES="info|Millennium|$old  (couldn't check for updates)|"
+        elif older "$old" "$latest"; then
+            UI_LINES="info|Millennium|$old  → $latest available|warn"
+        else
+            UI_LINES="info|Millennium|$old  ✓ up to date|good"
+        fi
+        if [ "$(current_mode)" = desktop ]; then
+            UI_LINES="$UI_LINES${UI_NL}info|Loads in|Desktop Mode (Game Mode stays stock)|"
+        else
+            UI_LINES="$UI_LINES${UI_NL}info|Loads in|Desktop Mode and Game Mode|"
+        fi
+        if auto_update_enabled; then
+            UI_LINES="$UI_LINES${UI_NL}info|Updates|automatic, every 6 hours|good"
+        else
+            UI_LINES="$UI_LINES${UI_NL}info|Updates|manual|dim"
+        fi
+        if millennium_loaded; then
+            UI_LINES="$UI_LINES${UI_NL}info|Steam|running with Millennium|good"
+        elif [ -n "$(loaded_millennium_path)" ]; then
+            UI_LINES="$UI_LINES${UI_NL}info|Steam|running an older copy, log out and back in|warn"
+        elif steam_running; then
+            UI_LINES="$UI_LINES${UI_NL}info|Steam|running without it, log out and back in|warn"
+        else
+            UI_LINES="$UI_LINES${UI_NL}info|Steam|not running|dim"
+        fi
+        UI_OPTS=""
+        if [ -n "$latest" ] && older "$old" "$latest"; then
+            UI_OPTS="u|Update to $latest|$UI_NL"
+        fi
+        if auto_update_enabled; then
+            UI_OPTS="${UI_OPTS}a|Turn automatic updates off|$UI_NL"
+        else
+            UI_OPTS="${UI_OPTS}a|Turn automatic updates on|$UI_NL"
+        fi
+        if [ "$(current_mode)" = both ]; then
+            UI_OPTS="${UI_OPTS}g|Load it in Desktop Mode only|$UI_NL"
+        elif decky_installed; then
+            UI_OPTS="${UI_OPTS}g|Also load it in Game Mode|(turns Decky off there)$UI_NL"
+        else
+            UI_OPTS="${UI_OPTS}g|Also load it in Game Mode|$UI_NL"
+        fi
+        UI_OPTS="${UI_OPTS}r|Reinstall|${UI_NL}d|Delete|${UI_NL}q|Quit|"
+    fi
+
+    UI_SEL=1
+    if [ -n "$old" ] && ! { [ -n "$latest" ] && older "$old" "$latest"; }; then
+        UI_SEL=$(printf '%s\n' "$UI_OPTS" | grep -c '')
+    fi
+    ui_choose
+    status=0
+    case "$UI_CHOICE" in
+        i | r)
+            if [ -z "$old" ] && [ -z "$game_mode" ]; then
+                if decky_installed; then
+                    detail="Decky stops working in Game Mode if you do. Most people say no."
+                else
+                    detail="Themes are made for the desktop client; Game Mode works either way."
+                fi
+                if ui_ask "Load Millennium in Game Mode too?" "$detail" n; then game_mode=both; else game_mode=desktop; fi
+            fi
+            if [ -z "$old" ]; then title="Installing Millennium${latest:+ $latest}"; else title="Reinstalling Millennium"; fi
+            ui_run "$title" do_install || status=$?
+            ;;
+        u) ui_run "Updating Millennium to $latest" do_update || status=$? ;;
+        a)
+            if auto_update_enabled; then
+                ui_run "Turning automatic updates off" do_set_auto_update off || status=$?
+            else
+                ui_run "Turning automatic updates on" do_set_auto_update on || status=$?
+            fi
+            ;;
+        g)
+            if [ "$(current_mode)" = desktop ]; then
+                ui_run "Loading Millennium in Game Mode too" do_set_mode both || status=$?
+            else
+                ui_run "Loading Millennium in Desktop Mode only" do_set_mode desktop || status=$?
+            fi
+            ;;
+        d)
+            if ui_ask "Delete Millennium?" "Steam goes back to normal, and Decky gets back what Millennium took." n; then
+                delete_data=no
+                for d in $DATA_DIRS; do
+                    if [ -d "$d" ]; then
+                        if ui_ask "Also delete your plugins and settings?" "Keep them if you might come back." n; then delete_data=yes; fi
+                        break
+                    fi
+                done
+                ui_run "Removing Millennium" do_uninstall || status=$?
+            fi
+            ;;
+    esac
+    if [ -z "$UI_LOG" ]; then
+        ui_stop
+        say "Nothing changed."
+    else
+        ui_finish
+    fi
+    return "$status"
+}
+
 # ---------------------------------------------------------------- main
 
 main() {
@@ -1048,7 +1547,9 @@ main() {
         check) do_check ;;
         auto) do_auto_update ;;
         *)
-            if interactive; then
+            if interactive && ui_supported; then
+                fullscreen_menu
+            elif interactive; then
                 menu
             elif [ -n "$(installed_version)" ]; then
                 do_update
