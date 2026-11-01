@@ -422,9 +422,9 @@ remove_old_env_files() {
 
 sha256_ok() {
     if command -v sha256sum >/dev/null 2>&1; then
-        (cd "$1" && sha256sum -c --status "$2")
+        (cd "$1" && sha256sum -c "$2" >/dev/null 2>&1)
     elif command -v shasum >/dev/null 2>&1; then
-        (cd "$1" && shasum -a 256 -c --status "$2")
+        (cd "$1" && shasum -a 256 -c "$2" >/dev/null 2>&1)
     else
         warn "No sha256sum found, so the download wasn't verified."
     fi
