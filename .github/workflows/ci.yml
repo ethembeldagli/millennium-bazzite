@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -s sh install.sh tests/run.sh
+
+  test:
+    name: tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Fedora, bash, systemd
+            image: fedora:latest
+            setup: dnf -y -q install tar gzip systemd
+          - name: Ubuntu, dash
+            image: ubuntu:24.04
+            setup: "true"
+          - name: Debian, dash
+            image: debian:12
+            setup: "true"
+          - name: Alpine, busybox
+            image: alpine:latest
+            setup: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - run: ${{ matrix.setup }}
+      - run: SHELL_UNDER_TEST=sh sh tests/run.sh
+
+  # Installs the real latest Millennium release into a fake home folder, so a
+  # change in Millennium's release files is caught early (also runs weekly).
+  real-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install, check and remove the latest Millennium
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME/.local/share/Steam/ubuntu12_32" "$HOME/.steam"
+          ln -s "$HOME/.local/share/Steam" "$HOME/.steam/steam"
+          printf '#!/bin/sh\n' > "$HOME/.local/share/Steam/ubuntu12_32/steam"
+          chmod +x "$HOME/.local/share/Steam/ubuntu12_32/steam"
+          sh install.sh --install --yes --no-restart
+          test -x "$HOME/.local/lib/millennium/libmillennium_luavm_x86"
+          test -L "$HOME/.steam/steam/ubuntu12_32/libXtst.so.6"
+          sh install.sh --check | tee check.txt
+          grep -q "up to date" check.txt
+          sh install.sh --uninstall --yes --no-restart
+          test ! -e "$HOME/.local/lib/millennium"
