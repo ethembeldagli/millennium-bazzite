@@ -48,6 +48,15 @@ jobs:
           if sh install.sh --check 2>err.txt; then exit 1; fi
           grep -q "not with sudo" err.txt
 
+  # Drives the full-screen menu with real key presses in a pseudo-terminal.
+  menu:
+    name: full-screen menu (key presses)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/ui_test.py dash
+      - run: python3 tests/ui_test.py bash
+
   # Installs the real latest Millennium release into a fake home folder, so a
   # change in Millennium's release files is caught early (also runs weekly).
   real-release:
