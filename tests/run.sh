@@ -17,7 +17,12 @@ passed=0
 failed=0
 
 pass() { passed=$((passed + 1)); printf '  ok   %s\n' "$1"; }
-fail() { failed=$((failed + 1)); printf '  FAIL %s\n' "$1"; }
+fail() {
+    failed=$((failed + 1))
+    printf '  FAIL %s\n' "$1"
+    # Show what the installer printed, which usually explains the failure.
+    if [ -f "$WORK/out" ] && [ "$failed" -le 3 ]; then sed 's/^/       | /' "$WORK/out" | tail -n 8; fi
+}
 check() { name=$1; shift; if "$@"; then pass "$name"; else fail "$name"; fi; }
 
 # A fake release tarball that has the same layout as the real one.
