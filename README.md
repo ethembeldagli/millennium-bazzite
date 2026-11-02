@@ -2,6 +2,11 @@
 
 **Steam themes and plugins on Bazzite.** One command, no root, survives system updates, updates itself, and keeps Decky working in Game Mode.
 
+> [!IMPORTANT]
+> **This is not official Millennium.** Millennium for Bazzite is an unofficial community installer. It is not made by, affiliated with, or endorsed by the [Millennium](https://github.com/SteamClientHomebrew/Millennium) project (Steam Homebrew), Valve, or Universal Blue / Bazzite. It only downloads Millennium's own official releases, unchanged, and sets them up for Bazzite.
+>
+> Problems with Millennium itself, themes or plugins: [Millennium's issues](https://github.com/SteamClientHomebrew/Millennium/issues). Problems installing on Bazzite: [issues here](https://github.com/ethembeldagli/millennium-bazzite/issues).
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ethembeldagli/millennium-bazzite/main/install.sh | sh
 ```

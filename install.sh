@@ -1,6 +1,10 @@
 #!/bin/sh
 # Millennium for Bazzite
 #
+# Unofficial: not made by, affiliated with, or endorsed by the Millennium
+# project (Steam Homebrew), Valve or Universal Blue. It installs Millennium's
+# own official releases, unchanged.
+#
 # Installs Millennium (themes and plugins for the Steam desktop client) into
 # your home folder, so it works on read-only systems like Bazzite where the
 # official installer can't write to /usr. No root, no reboot.
