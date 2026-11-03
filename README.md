@@ -3,7 +3,7 @@
 **Steam themes and plugins on Bazzite.** One command, no root, survives system updates, updates itself, and keeps Decky working in Game Mode.
 
 > [!IMPORTANT]
-> **This is not official Millennium.** Millennium for Bazzite is an unofficial community installer. It is not made by, affiliated with, or endorsed by the [Millennium](https://github.com/SteamClientHomebrew/Millennium) project (Steam Homebrew), Valve, or Universal Blue / Bazzite. It only downloads Millennium's own official releases, unchanged, and sets them up for Bazzite.
+> **This is not official Millennium.** Millennium for Bazzite is an unofficial community installer. It is not made by, affiliated with, or endorsed by the [Millennium](https://github.com/SteamClientHomebrew/Millennium) project (Steam Homebrew), Bazzite or its developers (Universal Blue), or Valve. It only downloads Millennium's own official releases, unchanged, and sets them up for Bazzite.
 >
 > Problems with Millennium itself, themes or plugins: [Millennium's issues](https://github.com/SteamClientHomebrew/Millennium/issues). Problems installing on Bazzite: [issues here](https://github.com/ethembeldagli/millennium-bazzite/issues).
 
@@ -114,7 +114,7 @@ Everything is in your home folder:
 
 [Millennium](https://github.com/SteamClientHomebrew/Millennium) by Steam Homebrew does all the real work. The home-folder approach builds on ideas from @igor-tsiglyar, @Shellke, @LunRos and @Zeglius in [Millennium#835](https://github.com/SteamClientHomebrew/Millennium/discussions/835).
 
-Not affiliated with Steam Homebrew, Valve or Universal Blue.
+Not affiliated with Steam Homebrew, Bazzite / Universal Blue, or Valve.
 
 ## Also by me
 
